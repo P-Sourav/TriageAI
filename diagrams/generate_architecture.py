@@ -1,140 +1,233 @@
 """
-Auto-generate the system architecture diagram (diagrams-as-code).
+Diagrams-as-code for AI Ticket Resolver.
 
 Run:  python diagrams/generate_architecture.py
-Produces: diagrams/architecture.png and diagrams/architecture.svg
-
-Using Graphviz means the diagram lives in version control and regenerates
-deterministically in CI — no manual drawing tools, no drift from the code.
+Produces:
+  diagrams/architecture.png / .svg   — full multi-agent flow
+  diagrams/prerequisites.png / .svg  — tech stack & setup overview
 """
 from __future__ import annotations
 
 import os
 from graphviz import Digraph
 
-# ---- Palette (dark "support command-center" theme) --------------------------
-BG = "#0f1419"
-INK = "#e6edf3"
-EDGE = "#8b98a5"
-USER = "#f2c14e"      # amber
-UI = "#56c2c0"        # teal
-AGENT = "#7aa2f7"     # blue
-DATA = "#9d7cd8"      # violet
-ALERT = "#f7768e"     # red
+# ---------------------------------------------------------------------------
+# Palette — vibrant dark "command-center" theme
+# ---------------------------------------------------------------------------
+BG     = "#0d1117"   # deep charcoal canvas
+INK    = "#e6edf3"   # near-white text
+MUTED  = "#8b949e"   # subtle edge / border tint
+
+# (gradient_top, gradient_bottom, glow_border)
+AMBER  = ("#f2c14e", "#c98b00", "#f5cc5e")   # User — gold
+TEAL   = ("#56c2c0", "#1e8f8d", "#7ddedd")   # Streamlit UI — cyan
+BLUE   = ("#7aa2f7", "#3a6ef5", "#a5c0ff")   # Agents / Orchestrator — electric blue
+VIOLET = ("#9d7cd8", "#6038c0", "#bb99f0")   # Data layer — purple
+RED    = ("#f7768e", "#d42047", "#ff97aa")   # Escalation — coral red
+GREEN  = ("#9ece6a", "#5c9e30", "#b8e87e")   # Success / resolve — lime
 
 
-def node(g, name, label, fill, shape="box"):
-    g.node(name, label, shape=shape, style="filled,rounded",
-           fillcolor=fill, fontcolor="#0b0e14", color=fill,
-           fontname="Helvetica", fontsize="11", margin="0.18,0.10")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def node(g, name: str, label: str, palette: tuple, shape: str = "box",
+         bold: bool = False, large: bool = False) -> None:
+    top, bot, border = palette
+    g.node(
+        name, label,
+        shape=shape,
+        style="filled,rounded",
+        fillcolor=f"{top}:{bot}",
+        gradientangle="90",
+        fontcolor="#0d1117",
+        color=border,
+        penwidth="2.8" if bold else "2.0",
+        fontname="Helvetica-Bold" if bold else "Helvetica",
+        fontsize="13" if large else ("11" if bold else "10"),
+        margin="0.24,0.14",
+        height="0.55",
+    )
 
 
+def cluster(g, name: str, label: str, border_color: str):
+    return g.subgraph(name=f"cluster_{name}", graph_attr={
+        "label": f"  {label}  ",
+        "color": border_color,
+        "penwidth": "2.0",
+        "fontcolor": INK,
+        "fontname": "Helvetica-Bold",
+        "fontsize": "12",
+        "style": "rounded",
+        "bgcolor": "#161b22",
+        "margin": "16",
+    })
+
+
+def primary_edge(g, src: str, dst: str, label: str = "",
+                 color: str = MUTED, bold: bool = False) -> None:
+    g.edge(src, dst, f" {label} " if label else "",
+           color=color, fontcolor=color,
+           fontname="Helvetica", fontsize="9",
+           penwidth="2.2" if bold else "1.6",
+           arrowsize="0.85")
+
+
+def dashed_edge(g, src: str, dst: str, label: str = "",
+                color: str = "#555e6b") -> None:
+    g.edge(src, dst, f" {label} " if label else "",
+           style="dashed", color=color, fontcolor=color,
+           fontname="Helvetica", fontsize="8",
+           penwidth="1.2", arrowsize="0.7")
+
+
+# ---------------------------------------------------------------------------
+# Main architecture diagram
+# ---------------------------------------------------------------------------
 def build() -> Digraph:
-    g = Digraph("AITicketResolver", format="png")
-    g.attr(rankdir="TB", bgcolor=BG, fontname="Helvetica",
-           fontcolor=INK, labelloc="t", fontsize="18",
-           label="AI Ticket Resolver — Multi-Agent Architecture")
-    g.attr("edge", color=EDGE, fontcolor=INK, fontname="Helvetica", fontsize="9")
+    g = Digraph("AITicketResolver")
+    g.attr(
+        rankdir="TB",
+        bgcolor=BG,
+        fontname="Helvetica-Bold",
+        fontcolor=INK,
+        labelloc="t",
+        fontsize="20",
+        label="AI Ticket Resolver  —  Multi-Agent Architecture",
+        splines="curved",
+        nodesep="0.6",
+        ranksep="0.9",
+        pad="0.5",
+        dpi="144",
+    )
+    g.attr("edge", fontname="Helvetica", fontsize="9")
 
-    # A. Client / UI
-    node(g, "user", "👤 User\n(chat + screenshot)", USER, shape="oval")
-    node(g, "ui", "🖥️ Streamlit UI\nlive agent transcript", UI)
+    # ── User + UI ────────────────────────────────────────────────────────────
+    node(g, "user", "👤  User\nchat  ·  screenshot", AMBER, shape="oval", bold=True, large=True)
+    node(g, "ui",   "🖥️  Streamlit UI\nlive agent transcript",  TEAL,  bold=True)
 
-    # B. Orchestrator
-    node(g, "orch", "🧭 Orchestrator\n(state machine + policy)", AGENT)
+    # ── Orchestrator ─────────────────────────────────────────────────────────
+    node(g, "orch", "🧭  Orchestrator\nstate machine  ·  routing policy", BLUE, bold=True, large=True)
 
-    # C. Agents cluster
-    with g.subgraph(name="cluster_agents") as c:
-        c.attr(label="Agent Layer", color=EDGE, fontcolor=INK, style="rounded")
-        node(c, "vision", "🖼️ Vision Analyzer", AGENT)
-        node(c, "clf", "🏷️ Classifier Agent\n(few-shot)", AGENT)
-        node(c, "know", "📚 Knowledge Agent\n(RAG retrieve)", AGENT)
-        node(c, "res", "🛠️ Resolution Agent\n(RAG generate + confidence)", AGENT)
-        node(c, "esc", "🚨 Escalation Agent", ALERT)
+    # ── Agent layer ───────────────────────────────────────────────────────────
+    with cluster(g, "agents", "⚙  Agent Layer", BLUE[2]) as c:
+        node(c, "vision", "🖼️  Vision Analyzer\nscreenshot → context",  BLUE)
+        node(c, "clf",    "🏷️  Classifier Agent\nfew-shot · category · priority", BLUE)
+        node(c, "know",   "📚  Knowledge Agent\nRAG retrieve · cosine search",    BLUE)
+        node(c, "res",    "🛠️  Resolution Agent\nRAG generate · confidence",      BLUE)
+        node(c, "esc",    "🚨  Escalation Agent\nroute · notify manager",         RED, bold=True)
 
-    # D. Shared services
-    node(g, "llm", "🧠 LLM Client\n(OpenAI / Anthropic / mock)", DATA, shape="box")
+    # ── LLM client ───────────────────────────────────────────────────────────
+    node(g, "llm", "🧠  LLM Client\nOpenAI  ·  Anthropic  ·  Mock", VIOLET, bold=True)
 
-    # E. Data + integrations
-    with g.subgraph(name="cluster_data") as d:
-        d.attr(label="Data & Integrations", color=EDGE, fontcolor=INK, style="rounded")
-        node(d, "kb", "🗄️ Knowledge Base\n(embeddings + cosine)", DATA, shape="cylinder")
-        node(d, "tickets", "🗃️ Ticket Store\n(SQLite)", DATA, shape="cylinder")
-        node(d, "smtp", "✉️ SMTP / Email", DATA)
-        node(d, "mgr", "👔 Ticket Manager", USER, shape="oval")
+    # ── Data & integrations ───────────────────────────────────────────────────
+    with cluster(g, "data", "🗄  Data & Integrations", VIOLET[2]) as d:
+        node(d, "kb",      "📦  Knowledge Base\nembeddings  ·  cosine index", VIOLET, shape="cylinder")
+        node(d, "tickets", "🗃️  Ticket Store\nSQLite  ·  audit log",          VIOLET, shape="cylinder")
+        node(d, "smtp",    "✉️  SMTP / Email\nescalation relay",               VIOLET)
+        node(d, "mgr",     "👔  Support Manager\nreceives escalation",         AMBER,  shape="oval")
 
-    # ---- Edges (the request lifecycle) -------------------------------------
-    g.edge("user", "ui", "1. message / image")
-    g.edge("ui", "orch", "2. submit")
-    g.edge("orch", "vision", "3. if image")
-    g.edge("orch", "clf", "4. classify")
-    g.edge("orch", "know", "5. retrieve")
-    g.edge("orch", "res", "6. resolve")
-    g.edge("orch", "esc", "7. if low conf / Critical", color=ALERT, fontcolor=ALERT)
+    # ── Primary request lifecycle ─────────────────────────────────────────────
+    primary_edge(g, "user",  "ui",   "1 · message / image",      TEAL[0],   bold=True)
+    primary_edge(g, "ui",    "orch", "2 · submit",               TEAL[0],   bold=True)
+    primary_edge(g, "orch",  "vision","3 · if image",            BLUE[0])
+    primary_edge(g, "orch",  "clf",  "4 · classify",             BLUE[0])
+    primary_edge(g, "orch",  "know", "5 · retrieve",             BLUE[0])
+    primary_edge(g, "orch",  "res",  "6 · resolve",              GREEN[0])
+    primary_edge(g, "orch",  "esc",  "7 · low-conf / Critical",  RED[0],    bold=True)
 
-    g.edge("clf", "llm", style="dashed")
-    g.edge("res", "llm", style="dashed")
-    g.edge("vision", "llm", style="dashed")
-    g.edge("know", "kb", "vector search")
-    g.edge("esc", "smtp", "send w/ ticket id", color=ALERT)
-    g.edge("smtp", "mgr", color=ALERT)
-    g.edge("orch", "tickets", "persist", style="dashed")
-    g.edge("orch", "ui", "8. stream turns", constraint="false", color=UI, fontcolor=UI)
+    # ── Stream response back to UI ────────────────────────────────────────────
+    g.edge("orch", "ui", " 8 · stream turns ",
+           color=TEAL[0], fontcolor=TEAL[0],
+           fontname="Helvetica", fontsize="9",
+           penwidth="2.0", arrowsize="0.85",
+           constraint="false", style="dashed")
+
+    # ── LLM calls (dashed) ────────────────────────────────────────────────────
+    dashed_edge(g, "clf",    "llm", color=VIOLET[0])
+    dashed_edge(g, "res",    "llm", color=VIOLET[0])
+    dashed_edge(g, "vision", "llm", color=VIOLET[0])
+
+    # ── Data flows ────────────────────────────────────────────────────────────
+    primary_edge(g, "know",  "kb",      "vector search",   VIOLET[0])
+    primary_edge(g, "esc",   "smtp",    "send · ticket id", RED[0], bold=True)
+    primary_edge(g, "smtp",  "mgr",                        "", RED[0])
+    dashed_edge( g, "orch",  "tickets", "persist")
 
     return g
 
 
+# ---------------------------------------------------------------------------
+# Prerequisites / tech-stack diagram
+# ---------------------------------------------------------------------------
 def prereqs() -> Digraph:
-    """Separate diagram: prerequisites and tech-stack overview."""
-    p = Digraph("Prerequisites", format="png")
-    p.attr(rankdir="LR", bgcolor=BG, fontname="Helvetica", fontcolor=INK,
-           labelloc="t", fontsize="16",
-           label="AI Ticket Resolver — Prerequisites & Tech Stack")
-    p.attr("edge", color=EDGE, fontname="Helvetica", fontsize="9", fontcolor=INK)
-    p.attr("node", fontname="Helvetica", fontsize="10")
+    p = Digraph("Prerequisites")
+    p.attr(
+        rankdir="TB",
+        bgcolor=BG,
+        fontname="Helvetica-Bold",
+        fontcolor=INK,
+        labelloc="t",
+        fontsize="18",
+        label="AI Ticket Resolver  —  Tech Stack & Setup",
+        splines="ortho",
+        nodesep="0.7",
+        ranksep="0.8",
+        pad="0.5",
+        dpi="144",
+    )
+    p.attr("edge", fontname="Helvetica", fontsize="9", color=MUTED, fontcolor=MUTED)
 
-    with p.subgraph(name="cluster_required") as r:
-        r.attr(label="Required", color=AGENT, fontcolor=INK, style="rounded")
-        node(r, "py",    "Python ≥ 3.10",               AGENT)
-        node(r, "pip",   "pip ≥ 23",                    AGENT)
-        node(r, "st",    "Streamlit ≥ 1.40",            AGENT)
-        node(r, "np",    "NumPy (cosine similarity)",   AGENT)
-        node(r, "sqlite","SQLite 3 (stdlib)",           AGENT)
-        node(r, "dotenv","python-dotenv",               AGENT)
+    # ── Foundation row ────────────────────────────────────────────────────────
+    with cluster(p, "runtime", "🐍  Runtime", BLUE[2]) as r:
+        node(r, "py",  "🐍  Python\ncore language",    BLUE, bold=True, large=True)
+        node(r, "pip", "📦  pip\npackage manager",     BLUE)
 
-    with p.subgraph(name="cluster_llm") as l:
-        l.attr(label="LLM Provider (choose one)", color=DATA, fontcolor=INK, style="rounded")
-        node(l, "mock",      "Mock (built-in)\nNo API key",         DATA)
-        node(l, "openai",    "OpenAI SDK ≥ 1.0\nGPT-4o-mini + embeddings", DATA)
-        node(l, "anthropic", "Anthropic SDK ≥ 0.25\nClaude 3.5 Haiku", DATA)
+    # ── Core framework row ────────────────────────────────────────────────────
+    with cluster(p, "framework", "🧱  Core Framework", TEAL[2]) as f:
+        node(f, "st",     "🖥️  Streamlit\nUI + streaming",   TEAL)
+        node(f, "np",     "🔢  NumPy\ncosine similarity",    TEAL)
+        node(f, "sqlite", "🗄  SQLite\ntickets + KB",        TEAL)
+        node(f, "dotenv", "🔐  python-dotenv\nconfig / secrets", TEAL)
 
-    with p.subgraph(name="cluster_optional") as o:
-        o.attr(label="Optional", color=EDGE, fontcolor=INK, style="rounded")
-        node(o, "gv",   "Graphviz (system)\nfor diagram regen",  UI)
-        node(o, "smtp", "SMTP server\nfor real email escalation", ALERT)
+    # ── LLM providers row ─────────────────────────────────────────────────────
+    with cluster(p, "providers", "🧠  LLM Provider  (choose one)", VIOLET[2]) as l:
+        node(l, "mock",      "🤖  Mock Provider\nbuilt-in · no key needed", GREEN,  bold=True)
+        node(l, "openai",    "⚡  OpenAI\nchat · vision · embeddings",      VIOLET)
+        node(l, "anthropic", "🌸  Anthropic\nchat · vision",                VIOLET)
 
-    p.edge("py", "st")
-    p.edge("py", "np")
-    p.edge("py", "sqlite")
-    p.edge("py", "dotenv")
-    p.edge("py", "mock", style="dashed")
-    p.edge("py", "openai", style="dashed")
-    p.edge("py", "anthropic", style="dashed")
+    # ── Integrations row ──────────────────────────────────────────────────────
+    with cluster(p, "integrations", "🔌  Integrations", AMBER[2]) as i:
+        node(i, "smtp_i", "✉️  SMTP Server\nescalation emails",        AMBER)
+        node(i, "gv_i",   "📐  Graphviz\ndiagram generation",          AMBER)
+
+    # ── Dependency edges ──────────────────────────────────────────────────────
+    for target in ["st", "np", "sqlite", "dotenv"]:
+        p.edge("py", target, penwidth="1.5", arrowsize="0.75", color=TEAL[0], fontcolor=TEAL[0])
+
+    for target in ["mock", "openai", "anthropic"]:
+        p.edge("st", target, penwidth="1.4", arrowsize="0.75",
+               color=VIOLET[0], fontcolor=VIOLET[0], style="dashed")
+
+    p.edge("st",    "smtp_i", penwidth="1.2", arrowsize="0.7", color=AMBER[0], style="dashed")
+    p.edge("gv_i",  "py",     penwidth="1.0", arrowsize="0.65", color=MUTED, style="dashed",
+           constraint="false")
 
     return p
 
 
+# ---------------------------------------------------------------------------
 def main() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
+
     g = build()
     g.render(os.path.join(here, "architecture"), format="png", cleanup=True)
     g.render(os.path.join(here, "architecture"), format="svg", cleanup=True)
-    print("Wrote diagrams/architecture.png and diagrams/architecture.svg")
+    print("Wrote  diagrams/architecture.png  and  diagrams/architecture.svg")
 
     pr = prereqs()
     pr.render(os.path.join(here, "prerequisites"), format="png", cleanup=True)
     pr.render(os.path.join(here, "prerequisites"), format="svg", cleanup=True)
-    print("Wrote diagrams/prerequisites.png and diagrams/prerequisites.svg")
+    print("Wrote  diagrams/prerequisites.png  and  diagrams/prerequisites.svg")
 
 
 if __name__ == "__main__":
