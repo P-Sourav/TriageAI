@@ -19,6 +19,7 @@ from typing import Iterator
 
 from config.settings import settings
 from src.agents.base import AgentMessage
+from src.logging.context import current_ticket_id
 from src.agents.classifier_agent import ClassifierAgent
 from src.agents.escalation_agent import EscalationAgent
 from src.agents.knowledge_agent import KnowledgeAgent
@@ -45,6 +46,23 @@ class Orchestrator:
                screenshot_bytes: bytes | None = None,
                screenshot_media_type: str = "image/png") -> Iterator[AgentMessage]:
         ticket = Ticket(subject=subject, description=description, user_email=user_email)
+        current_ticket_id.set(ticket.ticket_id)
+
+        try:
+            from src.logging.event_store import get_event_store
+            get_event_store().log(
+                agent_name="Orchestrator",
+                event_type="ticket_received",
+                direction="SEND",
+                payload={
+                    "subject": subject,
+                    "description": description,
+                    "user_email": user_email,
+                    "has_screenshot": bool(screenshot_bytes),
+                },
+            )
+        except Exception:
+            pass
 
         # 0) Vision (optional)
         if screenshot_bytes:

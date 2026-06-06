@@ -4,6 +4,7 @@ import pytest
 
 os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ.setdefault("DB_PATH", ":memory:")
+os.environ.setdefault("LOG_DB_PATH", ":memory:")
 
 from src.llm.client import LLMClient
 from src.knowledge_base.kb_store import KnowledgeBase

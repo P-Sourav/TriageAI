@@ -6,14 +6,16 @@ Design goals:
   * Swap providers via env (`LLM_PROVIDER`) without touching agent code.
   * A `mock` provider that needs no API key, so the whole app is demoable offline.
 
-This is the classic Strategy / Adapter pattern: agents code against the
-abstraction, the concrete provider is injected at runtime.
+Every `chat()` and `vision()` call is transparently logged to the EventStore:
+  SEND  → llm_prompt  (system + user messages)
+  RECEIVE → llm_response (raw text + duration)
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import time
 from typing import Any
 
 from config.settings import settings
@@ -26,7 +28,7 @@ class LLMClient:
         if self.provider in {"openai", "anthropic"}:
             self._init_real_client()
 
-    # -- provider bootstrap ---------------------------------------------------
+    # ── provider bootstrap ────────────────────────────────────────────────────
     def _init_real_client(self) -> None:
         if not settings.api_key:
             raise RuntimeError(
@@ -40,8 +42,22 @@ class LLMClient:
             import anthropic
             self._client = anthropic.Anthropic(api_key=settings.api_key)
 
-    # -- text chat ------------------------------------------------------------
+    # ── text chat (public — logs both sides) ──────────────────────────────────
     def chat(self, system: str, user: str, json_mode: bool = False) -> str:
+        self._log("LLM Client", "llm_prompt", "SEND", {
+            "system": system,
+            "user": user,
+            "json_mode": json_mode,
+        })
+        t0 = time.perf_counter()
+        result = self._chat(system, user, json_mode)
+        ms = int((time.perf_counter() - t0) * 1000)
+        self._log("LLM Client", "llm_response", "RECEIVE", {
+            "response": result,
+        }, duration_ms=ms)
+        return result
+
+    def _chat(self, system: str, user: str, json_mode: bool = False) -> str:
         if self.provider == "mock":
             return self._mock_chat(system, user, json_mode)
         if self.provider == "openai":
@@ -64,8 +80,22 @@ class LLMClient:
             return msg.content[0].text
         raise ValueError(f"Unknown provider {self.provider}")
 
-    # -- multimodal (screenshot) ---------------------------------------------
+    # ── multimodal (public — logs both sides, omits raw base64) ──────────────
     def vision(self, prompt: str, image_b64: str, media_type: str = "image/png") -> str:
+        self._log("LLM Client", "llm_prompt", "SEND", {
+            "prompt": prompt,
+            "media_type": media_type,
+            "image_bytes": f"{len(image_b64) * 3 // 4} bytes (base64 omitted)",
+        })
+        t0 = time.perf_counter()
+        result = self._vision(prompt, image_b64, media_type)
+        ms = int((time.perf_counter() - t0) * 1000)
+        self._log("LLM Client", "llm_response", "RECEIVE", {
+            "response": result,
+        }, duration_ms=ms)
+        return result
+
+    def _vision(self, prompt: str, image_b64: str, media_type: str = "image/png") -> str:
         if self.provider == "mock":
             return self._mock_vision(prompt)
         if self.provider == "openai":
@@ -92,16 +122,31 @@ class LLMClient:
             return msg.content[0].text
         raise ValueError(f"Unknown provider {self.provider}")
 
-    # -- embeddings (used by the Knowledge Agent's retriever) -----------------
+    # ── embeddings ────────────────────────────────────────────────────────────
     def embed(self, text: str) -> list[float]:
         if self.provider == "openai":
             v = self._client.embeddings.create(
                 model="text-embedding-3-small", input=text
             )
             return v.data[0].embedding
-        # mock / anthropic-without-embeddings fall back to a cheap deterministic
-        # hashing embedding so cosine similarity still behaves sensibly.
         return self._hash_embed(text)
+
+    # ── internal logging helper ───────────────────────────────────────────────
+    def _log(self, agent_name: str, event_type: str, direction: str,
+             payload: dict[str, Any], duration_ms: int = 0) -> None:
+        try:
+            from src.logging.event_store import get_event_store
+            get_event_store().log(
+                agent_name=agent_name,
+                event_type=event_type,
+                direction=direction,
+                payload=payload,
+                duration_ms=duration_ms,
+                provider=self.provider,
+                model=settings.llm_model,
+            )
+        except Exception:
+            pass  # logging must never crash the main pipeline
 
     # ========================= MOCK IMPLEMENTATIONS ==========================
     @staticmethod
@@ -114,10 +159,8 @@ class LLMClient:
         return [x / norm for x in vec]
 
     def _mock_chat(self, system: str, user: str, json_mode: bool) -> str:
-        """Heuristic stand-in so the demo works with zero credentials."""
         text = user.lower()
         if "classify" in system.lower() or "category" in system.lower():
-            # Only inspect the NEW ticket, not the few-shot exemplars in the prompt.
             if "new ticket:" in text:
                 text = text.split("new ticket:", 1)[1]
             category, priority = "Other", "Medium"

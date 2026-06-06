@@ -11,10 +11,10 @@ from src.llm.client import LLMClient
 @dataclass
 class AgentMessage:
     """One turn in the visible multi-agent conversation."""
-    agent: str                       # e.g. "Classifier Agent"
-    icon: str                        # emoji shown in the UI bubble
-    content: str                     # human-readable text
-    data: dict[str, Any] = field(default_factory=dict)  # structured payload
+    agent: str
+    icon: str
+    content: str
+    data: dict[str, Any] = field(default_factory=dict)
     ts: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -26,4 +26,16 @@ class BaseAgent:
         self.llm = llm
 
     def say(self, content: str, **data: Any) -> AgentMessage:
-        return AgentMessage(agent=self.name, icon=self.icon, content=content, data=data)
+        msg = AgentMessage(agent=self.name, icon=self.icon, content=content, data=data)
+        try:
+            from src.logging.event_store import get_event_store
+            get_event_store().log(
+                agent_name=self.name,
+                event_type="agent_output",
+                direction="RECEIVE",
+                payload={"content": content, **data},
+                provider=self.llm.provider,
+            )
+        except Exception:
+            pass
+        return msg

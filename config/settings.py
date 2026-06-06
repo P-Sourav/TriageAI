@@ -34,6 +34,7 @@ class Settings:
 
     # ---- Storage ------------------------------------------------------------
     db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "data/tickets.db"))
+    log_db_path: str = field(default_factory=lambda: os.getenv("LOG_DB_PATH", "data/agent_logs.db"))
 
     # ---- Email (SMTP) -------------------------------------------------------
     smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", "localhost"))
